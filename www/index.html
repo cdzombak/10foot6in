@@ -10,10 +10,6 @@
 
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/galleria/1.5.7/galleria.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/galleria/1.5.7/plugins/flickr/galleria.flickr.min.js"></script>
-
     <style type="text/css">
       body {
         font-size: 12pt;
@@ -48,6 +44,105 @@
         margin-top: 100px;
         margin-bottom: 50px;
       }
+
+      .photo-album-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 10px;
+        margin-top: 20px;
+      }
+
+      .photo-thumbnail {
+        width: 100%;
+        aspect-ratio: 1;
+        object-fit: cover;
+        cursor: pointer;
+        border-radius: 4px;
+        transition: transform 0.2s, box-shadow 0.2s;
+        border: 2px solid #ddd;
+      }
+
+      .photo-thumbnail:hover {
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+      }
+
+      .lightbox-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.9);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+
+      .lightbox-content {
+        max-width: 90%;
+        max-height: 90%;
+      }
+
+      #lightbox-image {
+        max-width: 100%;
+        max-height: calc(90vh - 80px);
+        display: block;
+      }
+
+      .lightbox-caption {
+        color: white;
+        text-align: center;
+        padding: 10px;
+        font-size: 14px;
+      }
+
+      .lightbox-close {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        color: white;
+        font-size: 40px;
+        font-weight: bold;
+        cursor: pointer;
+        z-index: 1001;
+        width: 50px;
+        height: 50px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .lightbox-close:hover {
+        color: #ccc;
+      }
+
+      .lightbox-nav-btn {
+        position: fixed;
+        top: 50%;
+        transform: translateY(-50%);
+        background-color: rgba(0, 0, 0, 0.5);
+        color: white;
+        border: none;
+        font-size: 30px;
+        padding: 15px 25px;
+        cursor: pointer;
+        z-index: 1001;
+        transition: background-color 0.2s;
+      }
+
+      .lightbox-nav-btn:hover {
+        background-color: rgba(0, 0, 0, 0.8);
+      }
+
+      .lightbox-nav-left {
+        left: 20px;
+      }
+
+      .lightbox-nav-right {
+        right: 20px;
+      }
     </style>
     <script defer src="https://ua.cdzombak.net/script.js" data-website-id="c131c6cf-e848-4500-a686-b569e9b830d3"></script>
   </head>
@@ -80,7 +175,16 @@
       </p>
 
       <h2>Photo Album from <a href="https://twitter.com/twbrandt" target="_new">Tom Brandt</a></h2>
-      <div id="galleria" style="height: 500px;"></div>
+      <div id="photo-album" class="photo-album-container"></div>
+      <div id="lightbox" class="lightbox-overlay" style="display: none;">
+        <span id="lightbox-close" class="lightbox-close">×</span>
+        <button id="prev-btn" class="lightbox-nav-btn lightbox-nav-left">◀</button>
+        <button id="next-btn" class="lightbox-nav-btn lightbox-nav-right">▶</button>
+        <div class="lightbox-content">
+          <img id="lightbox-image" src="" alt="">
+          <div id="lightbox-caption" class="lightbox-caption"></div>
+        </div>
+      </div>
 
       <h2>Ann Arbor News / MLive / AnnArbor.com Coverage</h2>
       <ul>
@@ -93,7 +197,7 @@
 
       <div class="footer">
         <hr />
-        <p class="text-muted">10foot6.in is run by <a href="https://twitter.com/localdzombak">Chris Dzombak.</a></p>
+        <p class="text-muted">10foot6.in is run by <a href="https://dzombak.com">Chris Dzombak.</a></p>
       </div>
     </div>
     </div>
@@ -101,14 +205,101 @@
 
     <script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
     <script>
-    	(function() {
-        Galleria.loadTheme('https://cdnjs.cloudflare.com/ajax/libs/galleria/1.5.7/themes/classic/galleria.classic.js');
-        Galleria.run('#galleria', {
-            flickr: 'set:72157600838421697',
-            flickrOptions: {
-              sort: 'date-posted-desc'
+      (function() {
+        let photos = [];
+        let currentPhotoIndex = 0;
+
+        async function loadPhotos() {
+          try {
+            console.log('Fetching photo metadata...');
+            const response = await fetch('photo_metadata.json');
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
             }
+            const data = await response.json();
+            console.log('Loaded photos:', data.photos.length);
+            photos = data.photos;
+            renderThumbnails();
+          } catch (error) {
+            console.error('Error loading photos:', error);
+            console.error('Make sure you are serving this via HTTP (not file://)');
+          }
+        }
+
+        function formatDate(dateString) {
+          if (!dateString) return '';
+          // Convert EXIF date format (YYYY:MM:DD) to ISO format (YYYY-MM-DD)
+          let formatted = dateString.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+          const date = new Date(formatted);
+          if (isNaN(date.getTime())) return '';
+          return date.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+          });
+        }
+
+        function renderThumbnails() {
+          const container = document.getElementById('photo-album');
+          console.log('Rendering', photos.length, 'thumbnails...');
+          container.innerHTML = '';
+          photos.forEach((photo, index) => {
+            const img = document.createElement('img');
+            img.src = photo.src;
+            img.alt = 'Tom Brandt photo';
+            img.className = 'photo-thumbnail';
+            img.onclick = () => openLightbox(index);
+            container.appendChild(img);
+          });
+          console.log('Thumbnails rendered');
+        }
+
+        function openLightbox(index) {
+          currentPhotoIndex = index;
+          const photo = photos[currentPhotoIndex];
+          const lightbox = document.getElementById('lightbox');
+          const lightboxImage = document.getElementById('lightbox-image');
+          const lightboxCaption = document.getElementById('lightbox-caption');
+
+          lightboxImage.src = photo.src;
+          const formattedDate = formatDate(photo.date);
+          lightboxCaption.textContent = formattedDate ? `Photo date: ${formattedDate}` : '';
+          lightbox.style.display = 'flex';
+        }
+
+        function closeLightbox() {
+          document.getElementById('lightbox').style.display = 'none';
+        }
+
+        function showPreviousPhoto() {
+          currentPhotoIndex = (currentPhotoIndex - 1 + photos.length) % photos.length;
+          openLightbox(currentPhotoIndex);
+        }
+
+        function showNextPhoto() {
+          currentPhotoIndex = (currentPhotoIndex + 1) % photos.length;
+          openLightbox(currentPhotoIndex);
+        }
+
+        document.getElementById('lightbox-close').onclick = closeLightbox;
+        document.getElementById('prev-btn').onclick = showPreviousPhoto;
+        document.getElementById('next-btn').onclick = showNextPhoto;
+
+        document.getElementById('lightbox').onclick = function(e) {
+          if (e.target === this) {
+            closeLightbox();
+          }
+        };
+
+        document.addEventListener('keydown', function(e) {
+          if (document.getElementById('lightbox').style.display === 'flex') {
+            if (e.key === 'Escape') closeLightbox();
+            if (e.key === 'ArrowLeft') showPreviousPhoto();
+            if (e.key === 'ArrowRight') showNextPhoto();
+          }
         });
+
+        loadPhotos();
       }());
     </script>
   </body>
